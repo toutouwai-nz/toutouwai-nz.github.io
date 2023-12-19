@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Toutouwai Blog</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="styles.css">
+<link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
+</head>
+<body>
+
+<div class="row">
+  <div class="column">
+    <h1>Toutouwai Blog</h1>
+    <p>A <del>blog</del> single page about data science, ecology and software engineering.</p>
+  </div>
+  <div class="column">
+    <img src="toutouwai.jpg" alt="Line drawing of toutouwai (NZ Robin)" width="215" height="280" id="hi">
+  </div>
+</div> 
+
+<div class="post">
+  <h3>19 December 2023 - 1st Post</h3> 
+  <h2>Configure Firefox with extensions on MacOS using Nix, Home Manager and nix-darwin</h2>
+
+  <p><i>TL;DR To install install Firefox with extensions using Nix, install Firefox using homebrew (via nix-darwin) and configure extensions using Home Manager. Make sure you tell Home Manager to not install Firefox.</i></p>
+
+  <p>I am new to Nix, but have been looking for an excuse to dive in.
+
+  I am interested in two aspects of Nix:
+  <ol>
+    <li>Declarative configuration to make it easier to set up new machines;</li>
+    <li>Fully reproducible environments.</li>
+  </ol>
+
+  My new job gave me a laptop, so I finally had a spare computer to play with. :)</p >
+
+  <p>My first goal was to get a pleasant development environment established. For me that involves vim, tmux, a tiling window manager, and a browser with vimium, bitwarden and uBlock origin; Advertisements hurt my eyes, and I don't want to have to type out long passwords.</p>
+
+  <p>After a couple of false starts, and doing some learning about Nix fundamentals, I was able to get a nice set up with Nix flakes, Home Manager and nix-darwin. Huge thanks to DeterminateSystems for their <a href="https://github.com/DeterminateSystems/nix-installer">nix installer script</a> and Patrick Walsh (zmre) for their <a href="https://www.youtube.com/watch?v=LE5JR4JcvMg">excellent video</a> detailing a simple nix on MacOS set up. However I had a really tough time getting Firefox installed with extensions, which is a pretty critical requirement for me - the internet without an adblocker is an unpleasant place.</p>
+
+  <p>You can use Home Manager to install and configure Firefox. <a href="https://nix-community.github.io/home-manager/options.xhtml#opt-programs.firefox.profiles._name_.extensions">Here is the documentation</a> for configuring Firefox Add-ons and Extensions that I was so looking forward to having.=</p>
+  
+  <p>Unfortunately Firefox on <a href="https://search.nixos.org">nixpgks</a> is broken for `aarch-darwin`.</p>
+
+  <p><code>error: Package ‘firefox-120.0.1’ in /nix/store/wk5dq7iwpd8yb4mnhb98k687kgdqachh-source/pkgs/applications/networking/browsers/firefox/wrapper.nix:418 is not available on the requested hostPlatform:
+    hostPlatform.config = "aarch64-apple-darwin"</code></p>
+
+  <p>I was encouraged when I found a blog post detailing <a href="https://cmacr.ae/blog/managing-firefox-on-macos-with-nix/">how to install Firefox on MacOS with nix using an overlay</a> 
+However I don't yet have an understanding of what overlays are, AND I was already using nix-darwin to install some software via homebrew so decided to check if I could use that to install Firefox too. You can. I did. It worked. Hoorah!
+BUT when I tried to add configuration in Home Manager to control Firefox settings the error about not being able to install Firefox on my platform returned.</p>
+
+  <p>As is often the case, the answer was found by reading the docs. I was making my way through the Home Manager configuration options, and <a href="https://nix-community.github.io/home-manager/options.html#opt-programs.firefox.package">I found a setting to stop Home Manager from trying to install Firefox</a>.
+I tried a <code>darwin-rebuild</code> and switch... and it worked!! The first time you open Firefox, you have to manually enable the nix-installed extensions, and hey presto you are done!</p>
+
+  <p>Nix can be very overwhelming to try to get your head around. I was delighted to have had a challenge that suited my level of understanding, and to have found a solution. Hopefully this post is helpful to someone experiencing a similar battle.</p> 
+
+  <p>Here is a minimal example <code>flake.nix</code> below:</p>
+
+  <pre>
+  <code>
+{
+  description = "MacOS Nix set up with Firefox and Firefox Extensions";
+
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+
+    home-manager.url = "github:nix-community/home-manager/master";
+    home-manager.inputs.nixpkgs.follows = "nixpkgs";
+
+    darwin.url = "github:lnl7/nix-darwin";
+    darwin.inputs.nixpkgs.follows = "nixpkgs";
+  
+    firefox-addons = {
+      url = "gitlab:rycee/nur-expressions?dir=pkgs/firefox-addons";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = inputs: {
+    darwinConfigurations.<COMPUTER_NAME> =
+      inputs.darwin.lib.darwinSystem {
+        system = "aarch64-darwin";
+        pkgs = import inputs.nixpkgs { system = "aarch64-darwin"; };
+        modules = [
+          ({ pkgs, ... }: {
+            # here go the darwin preferences and config items
+            environment.systemPackages = [ pkgs.coreutils ];
+            environment.systemPath = [ "/opt/homebrew/bin" ];
+            nix.extraOptions = ''
+              experimental-features = nix-command flakes
+             '';
+             system.keyboard.enableKeyMapping = true;
+             system.keyboard.remapCapsLockToEscape = true;
+             services.nix-daemon.enable = true;
+             users.users.<USER>.home = "/Users/<USER>";
+             system.defaults.dock.autohide = true;
+             # backwards compatability; don't change
+             system.stateVersion = 4;
+             homebrew = {
+              enable = true;
+              caskArgs.no_quarantine = true;
+              global.brewfile = true;
+              masApps = {};
+              casks = [ "firefox" ];
+             };
+           })
+           inputs.home-manager.darwinModules.home-manager
+           {
+             home-manager = {
+              useGlobalPkgs = true;
+              useUserPackages = true;
+              users.<USER>.imports = [
+                ({ pkgs, ... }: {
+                  home.stateVersion = "22.11";
+                  # Specify some home-manager configs
+                  home.packages = [ pkgs.ripgrep ];
+                  home.sessionVariables = {
+                    EDITOR = "vim";
+                  };
+                  programs.git = { 
+                    enable = true;
+                   };
+                  programs.firefox = {
+                    enable = true;
+                    # the command below was the critical addition
+                    package = null;
+                    profiles.<USER> = {
+                      isDefault = true;
+                      extensions = with inputs.firefox-addons.packages.${pkgs.system}; [
+                        ublock-origin
+                        bitwarden
+                        vimium
+                      ];
+                    };
+                  };
+                })
+              ];
+            };
+          }
+        ];
+      };
+  };
+}
+
+  </code>
+</pre>
+</div>
+</body>
+</html>
